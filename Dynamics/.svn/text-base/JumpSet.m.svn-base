@@ -1,0 +1,229 @@
+% *************************************************************************
+%
+% function evntVal = JumpSet(y, z, p)
+% function evntVal = JumpSet(y, z, p, exctFcnHndl, s)
+%
+% This MATLAB function defines the occurrence of discrete events that change
+% the dynamics of a bounding quadruped in 2D. The model's current
+% continuous and discrete states together with the model parameters are 
+% provided by the calling routine to which a vector of event function
+% values is returned. The directional zero-crossings of these functions
+% trigger each a different event. The function 'exctFcnHndl' (with
+% parameters 's') describes the excitation inputs for the actuators of 
+% the system. If it is not provided, a purely passive system is simulated. 
+% 
+%
+% Input:  - A vector of continuous states 'y' 
+%         - A vector of discrete states 'z' 
+%         - A vector of model system parameters 'p'
+%         OPTIONAL:
+%           - An excitation function 'exctFcnHndl', with the syntax  
+%             u = ExcitationFunction(y, z, s), describing the active inputs
+%             to the system.  If this function is not provided, the inputs
+%             are considered static and drawn from the definition file 
+%             (ExctStateDefinition).
+%           - A vector of parameters 's' for this function
+%
+% Output: - Each entry of 'evntVal' corresponds to a function, of which a
+%           zero-crossing (with positive derivative) is detected as event
+%
+%
+% Created by C. David Remy on 03/14/2011
+% MATLAB 2010a
+%
+% Documentation:
+%  'A MATLAB Framework For Gait Creation', 2011, C. David Remy (1), Keith
+%  Buffinton (2), and Roland Siegwart (1),  International Conference on
+%  Intelligent Robots and Systems, September 25-30, San Francisco, USA 
+%
+% (1) Autonomous Systems Lab, Institute of Robotics and Intelligent Systems, 
+%     Swiss Federal Institute of Technology (ETHZ) 
+%     Tannenstr. 3 / CLA-E-32.1
+%     8092 Zurich, Switzerland  
+%     cremy@ethz.ch; rsiegwart@ethz.ch
+%
+% (2) Department of Mechanical Engineering, 
+%     Bucknell University
+%     701 Moore Avenue
+%     Lewisburg, PA-17837, USA
+%     buffintk@bucknell.edu
+%
+%   See also HYBRIDDYNAMICS, FLOWMAP, JUMPMAP, COMPUTEDIFFERENTIABLEFORCES 
+%            CONTSTATEDEFINITION, DISCSTATEDEFINITION, SYSTPARAMDEFINITION,
+%            EXCTSTATEDEFINITION, EXCTPARAMDEFINITION, 
+%            VEC2STRUCT, STRUCT2VEC, 
+%            SYMBOLICCOMPUTATIONOFEQM. 
+%
+function evntVal = JumpSet(y, z, p, varargin)
+   
+    % Get a mapping for the state and parameter vectors.
+    % Keep the index-structs in memory to speed up processing
+    persistent contStateIndices discStateIndices exctParamVec exctParamIndices systParamIndices exctStateIndices exctStateVec
+    if isempty(contStateIndices) || isempty(discStateIndices) || isempty(exctParamVec) || isempty(exctParamIndices) || isempty(systParamIndices) || isempty(exctStateIndices) || isempty(exctStateVec)
+        [~           , ~, contStateIndices] = ContStateDefinition();
+        [~           , ~, discStateIndices] = DiscStateDefinition();
+        [exctParamVec, ~, exctParamIndices] = ExctParamDefinition();
+        [~           , ~, systParamIndices] = SystParamDefinition();
+        [exctStateVec, ~, exctStateIndices] = ExctStateDefinition();
+    end
+    
+    % Check if an excitation function was provided:
+    if nargin == 3
+        exctFcnHndl = [];
+        s = exctParamVec;
+    else
+        exctFcnHndl = varargin{1};
+        s = varargin{2};
+    end
+    
+    % Event 1: Detect touchdown front leg
+    % Event 2: Detect liftoff front leg
+    % Event 3: Detect touchdown back leg
+    % Event 4: Detect liftoff back leg
+    % Event 5: Detect stop (t == 1/strideFrequency for active systems,
+    %          otherwise dy == 0 during flight with additional timing
+    %          requirements)     
+    n_events = 5;
+    evntVal = zeros(n_events,1);
+    
+    % Pre-compute jacobians:
+    if z(discStateIndices.phaseF) == 1
+        [~, JF, dJFdtTIMESdqdt] = ContactKinematicsWrapperF(y, p);
+    end
+    if z(discStateIndices.phaseB) == 1 
+        [~, JB, dJBdtTIMESdqdt] = ContactKinematicsWrapperB(y, p);
+    end
+
+    
+	% *******
+    % Event 1: Detect touchdown front leg
+    if z(discStateIndices.phaseF) == 2 
+        pos = ContactKinematicsWrapperF(y, p);
+        % Event is detected if front foot goes below the ground during
+        % flight 
+        evntVal(1) = -pos(2);
+    else
+        % But only in phase 2
+        evntVal(1) = -1;
+    end
+    
+    
+    % *******
+    % Event 2: Detect liftoff front leg
+    if z(discStateIndices.phaseF) == 1
+        % Event is detected if the contact force becomes negative.
+        if isempty(exctFcnHndl)
+            % Use standard values, if no function was provided:
+            u = exctStateVec;
+        else
+            % Evalute the excitation function
+            u = exctFcnHndl(y, z, s);
+        end
+        % Compute the differentiable force vector (i.e. coriolis, gravity, and
+        % actuator forces): 
+        f_diff = ComputeDifferentiableForces(y,u,p);
+        % Mass matrix
+        M = MassMatrixWrapper(y,p);
+        % Contact Jacobian:
+        if z(discStateIndices.phaseB) == 1 
+            % Double-contact
+            J = [JF; JB];
+            dJdtTIMESdqdt = [dJFdtTIMESdqdt; dJBdtTIMESdqdt];
+        else
+            J = JF;
+            dJdtTIMESdqdt = dJFdtTIMESdqdt;
+        end
+        % Requirement for a closed contact is that the contact point
+        % acceleration is zero:
+        % J*dqddt + dJdt*dqdt = 0 
+        % with EoM:
+        % dqddt = M_inv*(f_diff + J'*f_cont)
+        % -> J*M_inv*(f_diff + J'*f_cont) + dJdt*dqdt = 0
+        % -> J*M_inv*f_diff + J*M_inv*J'*f_cont + dJdt*dqdt = 0
+        % -> f_cont = inv(J*M_inv*J')*(-J*M_inv*f_diff - dJdt*dqdt)
+        f_contX = (J*(M\J'))\(-J*(M\f_diff) - dJdtTIMESdqdt);
+        % The f_contX vector will have two or four elements, depending on
+        % the number of contact points (front, or front and back), but the
+        % y-component of the back foot force is always stored in the last
+        % element:
+        evntVal(2) = - f_contX(2) - 0.1; % Add a little offset to eliminate numerical jitter
+    else
+        % But only in phase 1
+        evntVal(2) = -1;
+    end
+    
+    % *******
+    % Event 3: Detect touchdown back leg
+    if z(discStateIndices.phaseB) == 2 
+        pos = ContactKinematicsWrapperB(y, p);
+        % Event is detected if back foot goes below the ground during
+        % flight 
+        evntVal(3) = -pos(2);
+    else
+        % But only in phase 2
+        evntVal(3) = -1;
+    end
+    
+    
+    % *******
+    % Event 4: Detect liftoff back leg
+    if z(discStateIndices.phaseB) == 1
+        % Event is detected if the contact force becomes negative.
+        if isempty(exctFcnHndl)
+            % Use standard values, if no function was provided:
+            u = exctStateVec;
+        else
+            % Evalute the excitation function
+            u = exctFcnHndl(y, z, s);
+        end
+        % Compute the differentiable force vector (i.e. coriolis, gravity, and
+        % actuator forces): 
+        f_diff = ComputeDifferentiableForces(y,u,p);
+        % Mass matrix
+        M = MassMatrixWrapper(y,p);
+        % Contact Jacobian:
+        if z(discStateIndices.phaseF) == 1 
+            % Double-contact
+            J = [JF; JB];
+            dJdtTIMESdqdt = [dJFdtTIMESdqdt; dJBdtTIMESdqdt];
+        else
+            J = JB;
+            dJdtTIMESdqdt = dJBdtTIMESdqdt;
+        end
+        % Requirement for a closed contact is that the contact point
+        % acceleration is zero:
+        % J*dqddt + dJdt*dqdt = 0 
+        % with EoM:
+        % dqddt = M_inv*(f_diff + J'*f_cont)
+        % -> J*M_inv*(f_diff + J'*f_cont) + dJdt*dqdt = 0
+        % -> J*M_inv*f_diff + J*M_inv*J'*f_cont + dJdt*dqdt = 0
+        % -> f_cont = inv(J*M_inv*J')*(-J*M_inv*f_diff - dJdt*dqdt)
+        f_contX = (J*(M\J'))\(-J*(M\f_diff) - dJdtTIMESdqdt);
+        % The f_contX vector will have two or four elements, depending on
+        % the number of contact points (back, or front and back), but the
+        % y-component of the back foot force is always stored in the last
+        % element:
+        evntVal(4) = - f_contX(end) - 0.1; % Add a little offset to eliminate numerical jitter
+    else
+        % But only in phase 1
+        evntVal(4) = -1;
+    end
+    
+    
+    % *******
+    % Event 5: detect stop (t == 1/strideFrequency for active systems,
+    % otherwise dy == 0 during flight with additional timing requirements)
+    if ~isempty(exctFcnHndl)
+        evntVal(5) = y(contStateIndices.time) - 1/s(exctParamIndices.strideFreq);
+	else % else use apex transit 
+        if z(discStateIndices.phaseF) == 2 && z(discStateIndices.phaseB) == 2 && y(contStateIndices.time)>0
+            evntVal(5) = -y(contStateIndices.dy);
+        else
+            % But only in phase 2 and after some time has passed since the
+            % start (to allow for all four touchdown/liftoff events)
+            evntVal(5) = -1;
+        end
+    end
+end
+% *************************************************************************
+% *************************************************************************

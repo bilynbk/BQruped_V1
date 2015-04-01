@@ -1,0 +1,161 @@
+% *************************************************************************
+%
+% function dydt = FlowMap(y, z, p)
+% function dydt = FlowMap(y, z, p, exctFcnHndl, s)
+% 
+% This MATLAB function defines the continuous dynamics of a bounding
+% quadruped in 2D. The models current continuous and discrete states, as well
+% as the model parameters are given by the calling routine and the
+% derivative of the continuous states is returned. The 'exctFcnHndl'
+% describes the inputs to the actuators of the system. If it is not
+% provided, a purely passive system is simulated.   
+% 
+%
+% Input:  - A vector of continuous states 'y' 
+%         - A vector of discrete states 'z' 
+%         - A vector of model system parameters 'p'
+%         OPTIONAL:
+%           - An excitation function 'exctFcnHndl', with the syntax  
+%             u = ExcitationFunction(y, z, s), describing the active inputs
+%             to the system.  If this function is not provided, the inputs
+%             are considered static and drawn from the definition file 
+%             (ExctStateDefinition).
+%           - A vector of parameters 's' for this function
+% 
+% Output: - The derivative of the continuous state vector 'dydt'
+%
+% Created by C. David Remy on 03/14/2011
+% MATLAB 2010a
+%
+% Documentation:
+%  'A MATLAB Framework For Gait Creation', 2011, C. David Remy (1), Keith
+%  Buffinton (2), and Roland Siegwart (1),  International Conference on
+%  Intelligent Robots and Systems, September 25-30, San Francisco, USA 
+%
+% (1) Autonomous Systems Lab, Institute of Robotics and Intelligent Systems, 
+%     Swiss Federal Institute of Technology (ETHZ) 
+%     Tannenstr. 3 / CLA-E-32.1
+%     8092 Zurich, Switzerland  
+%     cremy@ethz.ch; rsiegwart@ethz.ch
+%
+% (2) Department of Mechanical Engineering, 
+%     Bucknell University
+%     701 Moore Avenue
+%     Lewisburg, PA-17837, USA
+%     buffintk@bucknell.edu
+%
+%   See also HYBRIDDYNAMICS, JUMPMAP, JUMPSET, COMPUTEDIFFERENTIABLEFORCES 
+%            CONTSTATEDEFINITION, DISCSTATEDEFINITION, SYSTPARAMDEFINITION,
+%            EXCTSTATEDEFINITION, EXCTPARAMDEFINITION, 
+%            VEC2STRUCT, STRUCT2VEC, 
+%            SYMBOLICCOMPUTATIONOFEQM. 
+%
+function dydt = FlowMap(y, z, p, varargin)
+
+    % Get a mapping for the state and parameter vectors.
+    % Keep the index-structs in memory to speed up processing
+    persistent contStateIndices exctStateVec exctStateIndices systParamIndices discStateIndices
+    if isempty(contStateIndices) || isempty(exctStateVec) || isempty(exctStateIndices) || isempty(systParamIndices) || isempty(discStateIndices)
+        [~,            ~, contStateIndices] = ContStateDefinition();
+        [exctStateVec, ~, exctStateIndices] = ExctStateDefinition();
+        [~,            ~, systParamIndices] = SystParamDefinition();
+        [~,            ~, discStateIndices] = DiscStateDefinition();
+    end
+    
+    % Check if an excitation function was provided:
+    if nargin == 5
+        exctFcnHndl = varargin{1};
+        s = varargin{2};
+    else
+        exctFcnHndl = [];
+        s = [];
+    end
+    
+    % Mapping the state-vector to the derivatives ensures a correct vector
+    % size
+    dydt = y;
+
+    % Map velocities to position derivatives:
+    dydt(contStateIndices.x)       = y(contStateIndices.dx);
+    dydt(contStateIndices.y)       = y(contStateIndices.dy);
+    dydt(contStateIndices.phi)     = y(contStateIndices.dphi);
+    dydt(contStateIndices.alphaF)  = y(contStateIndices.dalphaF);
+    dydt(contStateIndices.lF)      = y(contStateIndices.dlF);
+    dydt(contStateIndices.alphaB)  = y(contStateIndices.dalphaB);
+    dydt(contStateIndices.lB)      = y(contStateIndices.dlB);
+    
+    % Other states that do not depend on the current phase...
+    dydt(contStateIndices.time) = 1;
+
+    % Compute the position and velocity of the actuators:
+    if isempty(exctFcnHndl)
+        % Use standard values, if no function was provided:
+        u = exctStateVec;
+    else
+        u = exctFcnHndl(y, z, s);
+    end
+    
+    % Compute the differentiable force vector (i.e. coriolis forces,
+	% gravity, and actuator forces): 
+	[f_diff, F_lF, T_alphaF, F_lB, T_alphaB] = ComputeDifferentiableForces(y, u, p);
+    
+    % Compute the acumulated positive mechanical work (assuming that
+    % negative work can not be recovered): 
+    dydt(contStateIndices.posWork)  = max(0,F_lF*u(exctStateIndices.dulF)) +...
+                                      max(0,T_alphaF*u(exctStateIndices.dualphaF)) +...
+                                      max(0,F_lB*u(exctStateIndices.dulB)) +...
+                                      max(0,T_alphaB*u(exctStateIndices.dualphaB));
+
+    % Mass matrix
+    M = MassMatrixWrapper(y,p);
+    % Compute contact forces depending on the current phase of the model:
+    switch z(discStateIndices.phaseF) + 2*z(discStateIndices.phaseB)
+        % Requirement for contact (contact constraint):
+        % Contact point acceleration must be zero:
+        % J*dqddt + dJdt*dqdt = 0 
+        % with EoM:
+        % dqddt = M_inv*(f_diff + J'*f_cont)
+        % -> J*M_inv*(f_diff + J'*f_cont) + dJdt*dqdt = 0
+        % -> J*M_inv*f_diff + J*M_inv*J'*f_cont + dJdt*dqdt = 0
+        % -> f_cont = inv(J*M_inv*J')*(-J*M_inv*f_diff - dJdt*dqdt)
+        case 3 % stance front (phaseF = 1) and stance back (phaseB = 1)
+            % Contact jacobian for both feet:
+            [~, JF, dJFdtTIMESdqdt] = ContactKinematicsWrapperF(y, p);
+            [~, JB, dJBdtTIMESdqdt] = ContactKinematicsWrapperB(y, p);
+            J = [JF; JB];
+            dJdtTIMESdqdt = [dJFdtTIMESdqdt; dJBdtTIMESdqdt];
+            f_contX = (J*(M\J'))\(-J*(M\f_diff) - dJdtTIMESdqdt);
+            % Project these forces back into the generalized coordinate space
+            f_contQ = J'*f_contX;
+        case 4 % flight front (phaseF = 2) and stance back (phaseB = 1)
+            % Contact jacobian for the back foot:
+            [~, J, dJdtTIMESdqdt] = ContactKinematicsWrapperB(y, p);
+            f_contX = (J*(M\J'))\(-J*(M\f_diff) - dJdtTIMESdqdt);
+            % Project these forces back into the generalized coordinate space
+            f_contQ = J'*f_contX;
+        case 5 % stance front (phaseF = 1) and flight back (phaseB = 2)
+            % Contact jacobian for the front foot:
+            [~, J, dJdtTIMESdqdt] = ContactKinematicsWrapperF(y, p);
+            f_contX = (J*(M\J'))\(-J*(M\f_diff) - dJdtTIMESdqdt);
+            % Project these forces back into the generalized coordinate space
+            f_contQ = J'*f_contX;
+        case 6 % flight front (phaseF = 2) and flight back (phaseB = 2)
+            % no contact forces in the generalized coordinate space:
+            f_contQ = zeros(size(f_diff));
+    end
+    % EQM:
+    dd_q = M\(f_diff + f_contQ);
+    
+    % Map the generalized accelerations back into continuous state
+    % derivatives:
+	dydt(contStateIndices.dx)        = dd_q(1);
+    dydt(contStateIndices.dy)        = dd_q(2);
+    dydt(contStateIndices.dphi)      = dd_q(3);
+    dydt(contStateIndices.dalphaF)   = dd_q(4);
+    dydt(contStateIndices.dlF)       = dd_q(5);
+    dydt(contStateIndices.dalphaB)   = dd_q(6);
+    dydt(contStateIndices.dlB)       = dd_q(7);
+end
+% *************************************************************************
+% *************************************************************************
+

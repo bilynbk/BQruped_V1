@@ -1,0 +1,208 @@
+% *************************************************************************
+%
+% function [yPLUS, zPLUS, isTerminal] = JumpMap(yMINUS, zMINUS, p, event)
+% function [yPLUS, zPLUS, isTerminal] = JumpMap(yMINUS, zMINUS, p, exctFcnHndl, s, event)
+% 
+% This MATLAB function defines the discrete dynamics of a hybrid dynamic
+% model of a bounding quadruped in 2D. The model's current continuous and
+% discrete states before an event (together with the model parameters) are
+% provided by the calling routine to which the states after the event are
+% returned.  The function 'exctFcnHndl' (with parameters 's') describes the
+% excitation inputs for the actuators of the system. If it is not provided,
+% a purely passive system is simulated.  
+%
+% Input:  - A vector of continuous states before the event 'yMINUS' 
+%         - A vector of discrete states before the event 'zMINUS' 
+%         - A vector of model system parameters 'p'
+%         OPTIONAL:
+%           - An excitation function 'exctFcnHndl', with the syntax  
+%             u = ExcitationFunction(y, z, s), describing the active inputs
+%             to the system.  If this function is not provided, the inputs
+%             are considered static and drawn from the definition file 
+%             (ExctStateDefinition).
+%           - A vector of parameters 's' for this function
+%         - A event number that corresponds to the entry in the
+%           JumpSet-function which triggered this event.
+%
+% Output: - A vector of continuous states after the event 'yPLUS' 
+%         - A vector of discrete states after the event 'zPLUS' 
+%         - A Boolean flag that indicates if the current event will 
+%           terminate the simulation or not.
+%
+% Created by C. David Remy on 03/14/2011
+% MATLAB 2010a
+%
+% Documentation:
+%  'A MATLAB Framework For Gait Creation', 2011, C. David Remy (1), Keith
+%  Buffinton (2), and Roland Siegwart (1),  International Conference on
+%  Intelligent Robots and Systems, September 25-30, San Francisco, USA 
+%
+% (1) Autonomous Systems Lab, Institute of Robotics and Intelligent Systems, 
+%     Swiss Federal Institute of Technology (ETHZ) 
+%     Tannenstr. 3 / CLA-E-32.1
+%     8092 Zurich, Switzerland  
+%     cremy@ethz.ch; rsiegwart@ethz.ch
+%
+% (2) Department of Mechanical Engineering, 
+%     Bucknell University
+%     701 Moore Avenue
+%     Lewisburg, PA-17837, USA
+%     buffintk@bucknell.edu
+%
+%   See also HYBRIDDYNAMICS, FLOWMAP, JUMPSET, COMPUTEDIFFERENTIABLEFORCES 
+%            CONTSTATEDEFINITION, DISCSTATEDEFINITION, SYSTPARAMDEFINITION,
+%            EXCTSTATEDEFINITION, EXCTPARAMDEFINITION, 
+%            VEC2STRUCT, STRUCT2VEC, 
+%            SYMBOLICCOMPUTATIONOFEQM. 
+%
+function [yPLUS, zPLUS, isTerminal] = JumpMap(yMINUS, zMINUS, p, varargin)
+    
+    % Get a mapping for the state and parameter vectors.
+    % Keep the index-structs in memory to speed up processing
+    persistent contStateIndices discStateIndices exctParamVec exctParamIndices 
+    if isempty(contStateIndices) || isempty(discStateIndices) || isempty(exctParamVec) || isempty(exctParamIndices)
+        [~,            ~, contStateIndices] = ContStateDefinition();
+        [~,            ~, discStateIndices] = DiscStateDefinition();
+        [exctParamVec, ~, exctParamIndices] = ExctParamDefinition();
+    end
+    
+    % Check if an excitation function was provided:
+    if nargin == 4
+        s = exctParamVec;
+        event = varargin{1};
+    else
+        s = varargin{2};
+        event = varargin{3};
+    end
+        
+    % As most things remain unchanged we copy the incoming states
+    yPLUS = yMINUS;
+    zPLUS = zMINUS;
+    
+    % Event 1: Detect touchdown front leg
+    % Event 2: Detect liftoff front leg
+    % Event 3: Detect touchdown back leg
+    % Event 4: Detect liftoff back leg
+    % Event 5: Detect stop (t == 1/strideFrequency for active systems,
+    %          otherwise dy == 0 during flight with additional timing
+    %          requirements)     
+    switch event
+        case 1 % Event 1: detected touchdown front leg
+            % At touchdown, the contact point comes to a complete rest, a
+            % fully plastic collision is computed:
+            % Compute mass matrix
+            M = MassMatrixWrapper(yMINUS,p);
+            % Contact Forces (with Jacobian):
+            [~, JF] = ContactKinematicsWrapperF(yMINUS, p);
+            if zMINUS(discStateIndices.phaseB) == 1 
+                % Double-contact:
+                [~, JB] = ContactKinematicsWrapperB(yMINUS, p);
+                J = [JF; JB];
+            else
+                % Single-contact:
+                J = JF;
+            end
+            % Velocities before collision:
+            dqMINUS = zeros(5,1);
+            dqMINUS(1) = yMINUS(contStateIndices.dx);
+            dqMINUS(2) = yMINUS(contStateIndices.dy);
+            dqMINUS(3) = yMINUS(contStateIndices.dphi);
+            dqMINUS(4) = yMINUS(contStateIndices.dalphaF);
+            dqMINUS(5) = yMINUS(contStateIndices.dlF);
+            dqMINUS(6) = yMINUS(contStateIndices.dalphaB);
+            dqMINUS(7) = yMINUS(contStateIndices.dlB);
+            % Project EoM into the contact space:
+            % Rest after contact: J*qPlus = 0
+            % with: M*(qPlus-qMinus) = I_cont_q % with the contact impulse I_cont
+            % qPlus = inv_M*I_cont_q + qMinus
+            % -> J*inv_M*I_cont_q + qMinus = 0
+            % -> J*inv_M*J'*I_cont_x + qMinus = 0
+            % -> I_cont_x = -inv(J*inv_M*J')*qMinus
+            % -> I_cont_q = -J'*inv(J*inv_M*J')*qMinus
+            % qPlus = -inv(M)*J'*inv(J*inv(M)*J')*qMinus + qMinus
+            dqPLUS  = (eye(7) - M\(J'*((J*(M\J'))\J)))*dqMINUS;
+            % Velocities after collision
+            yPLUS(contStateIndices.dx)      = dqPLUS(1);
+            yPLUS(contStateIndices.dy)      = dqPLUS(2);
+            yPLUS(contStateIndices.dphi)    = dqPLUS(3);
+            yPLUS(contStateIndices.dalphaF) = dqPLUS(4);
+            yPLUS(contStateIndices.dlF)     = dqPLUS(5);
+            yPLUS(contStateIndices.dalphaB) = dqPLUS(6);
+            yPLUS(contStateIndices.dlB)     = dqPLUS(7);
+            % Set new phase for the front leg
+            zPLUS(discStateIndices.phaseF) = 1;
+            % Intermediate event. Simulation continues
+            isTerminal = false; 
+        case 2 % Event 2: detected liftoff front leg
+            % Velocities remain unchanged
+            % Set new phase for the front leg
+            zPLUS(discStateIndices.phaseF)  = 2;
+            % Intermediate event. Simulation continues
+            isTerminal = false; 
+        case 3 % Event 3: detected touchdown back leg
+            % At touchdown, the contact point comes to a complete rest, a
+            % fully plastic collision is computed:
+            % Compute mass matrix
+            M = MassMatrixWrapper(yMINUS,p);
+            % Contact Forces (with Jacobian):
+            [~, JB] = ContactKinematicsWrapperB(yMINUS, p);
+            if zMINUS(discStateIndices.phaseB) == 1 
+                % Double-contact
+                [~, JF] = ContactKinematicsWrapperF(yMINUS, p);
+                J = [JF; JB];
+            else
+                J = JB;
+            end
+            % Velocities before collision:
+            dqMINUS = zeros(5,1);
+            dqMINUS(1) = yMINUS(contStateIndices.dx);
+            dqMINUS(2) = yMINUS(contStateIndices.dy);
+            dqMINUS(3) = yMINUS(contStateIndices.dphi);
+            dqMINUS(4) = yMINUS(contStateIndices.dalphaF);
+            dqMINUS(5) = yMINUS(contStateIndices.dlF);
+            dqMINUS(6) = yMINUS(contStateIndices.dalphaB);
+            dqMINUS(7) = yMINUS(contStateIndices.dlB);
+            % Project EoM into the contact space:
+            % Rest after contact: J*qPlus = 0
+            % with: M*(qPlus-qMinus) = I_cont_q % with the contact impulse I_cont
+            % qPlus = inv_M*I_cont_q + qMinus
+            % -> J*inv_M*I_cont_q + qMinus = 0
+            % -> J*inv_M*J'*I_cont_x + qMinus = 0
+            % -> I_cont_x = -inv(J*inv_M*J')*qMinus
+            % -> I_cont_q = -J'*inv(J*inv_M*J')*qMinus
+            % qPlus = -inv(M)*J'*inv(J*inv(M)*J')*qMinus + qMinus
+            dqPLUS  = (eye(7) - M\(J'*((J*(M\J'))\J)))*dqMINUS;
+            % Velocities after collision
+            yPLUS(contStateIndices.dx)      = dqPLUS(1);
+            yPLUS(contStateIndices.dy)      = dqPLUS(2);
+            yPLUS(contStateIndices.dphi)    = dqPLUS(3);
+            yPLUS(contStateIndices.dalphaF) = dqPLUS(4);
+            yPLUS(contStateIndices.dlF)     = dqPLUS(5);
+            yPLUS(contStateIndices.dalphaB) = dqPLUS(6);
+            yPLUS(contStateIndices.dlB)     = dqPLUS(7);
+            % Set new phase for the back leg
+            zPLUS(discStateIndices.phaseB) = 1;
+            % Intermediate event. Simulation continues
+            isTerminal = false; 
+        case 4 % Event 4: detected liftoff back leg
+            % Velocities remain unchanged
+            % Set new phase for the back leg
+            zPLUS(discStateIndices.phaseB)  = 2;
+            % Intermediate event. Simulation continues
+            isTerminal = false; 
+        case 5 % Event 5: detected stop (t == 1/strideFrequency for active systems, 
+               %          otherwise dy == 0 during flight with additional timing
+               %          requirements)     
+            % Subtract T_stride to force the time-variable to be periodic:
+            yPLUS(contStateIndices.time) = yMINUS(contStateIndices.time) - 1/s(exctParamIndices.strideFreq);
+            % Compute the cost of transportation.  It is important that the
+            % simulation started with x = 0 in order to get this correct
+            if yMINUS(contStateIndices.x) > 0
+                zPLUS(discStateIndices.COT) = yMINUS(contStateIndices.posWork)/yMINUS(contStateIndices.x);
+            end
+            % This event stops simulation of the system
+            isTerminal = true; 
+    end
+end
+% *************************************************************************
+% *************************************************************************
