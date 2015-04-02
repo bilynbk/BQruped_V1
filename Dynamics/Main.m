@@ -20,10 +20,10 @@ clc
 
 %% 1) Find an optimal periodic solution for all parameters 
 %INITIAL VALUES:
-yINIT = contStateVec
-zINIT = discStateVec
-pINIT = sysParamVec
-sINIT = actParamVec % just for active bounding
+yINIT = contStateVec;
+zINIT = discStateVec;
+pINIT = sysParamVec;
+sINIT = actParamVec; % just for active bounding
 
 % VALUES OPTIMIZED
 yOPTIM = ones(size(yINIT)) % optimize all values
@@ -36,5 +36,9 @@ yOPTIM(contStateIndices.time) = 0;
 yOPTIM(contStateIndices.posWork) = 0;
 %Initial continuous states are not altered
 zOPTIMstruct = struct();
+zOPTIM = Struct2Vec(zOPTIMstruct,discStateNames);
+
+
+
 
 
