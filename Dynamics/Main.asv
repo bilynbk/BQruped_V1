@@ -75,29 +75,15 @@ zCOSTstruct.COT = 1;
 zCOST = Struct2Vec(zCOSTstruct,discStateNames);
 %No COST contribution from the system parameters
 pCOSTstruct = struct();
-pCOST = Struct2Vec(pCOSTstruct,sysParamNames)
+pCOST = Struct2Vec(pCOSTstruct,sysParamNames);
 %No cost contribution from from exciation parameters
 sCOSTstruct = struct();
-sCOST = Struct2Vec(sCOSTstruct,actParamNames)
+sCOST = Struct2Vec(sCOSTstruct,actParamNames);
 %The yDependency helps speeding up  the computation of the Jacobian in the
 %optimization by telling the optimizer which derivatives depends on which
 %states
 yDEPENDENCYstruct.x   = 0; %this state has no impact on the right hand side of the ODE->'0'
-yDEPENDENCYstruct.dx = 1; %this state is the derivative of state #1 x->1
-yDEPENDENCYstruct.y   = 0; %this state has no impact on the right hand side of the ODE->0
-yDEPENDENCYstruct.dy = 3; %this state is the derivative of the state #3 y->3
-yDEPENDENCYstruct.thetaB = -1; %All following states impact the right hand side ODE
-yDEPENDENCYstruct.thetaF = -1;
-yDEPENDENCYstruct.dthetaB = -1;
-yDEPENDENCYstruct.dthetaF = -1;
-yDEPENDENCYstruct.time = -1;
-yDEPENDENCYstruct.posWork = 0;
-dircolOptions.yDependency = Struct2Vec(yDEPENDENCYstruct,contStateNames);
-%
-%In the current case this is air-phase, back-stance, double-stance, front-stance,
-% air-phase.  The corresponding event-sequence (event # in parenthesis)
-% that is passed to the optimizer is thus: 'Back touch down (3)', 'Front
-% touch down (1)', 'Back lift off (4)', 'Front lift off (2)', 'Stride time
-% reached (5)':
-dircolOptions.ordEvents = [3 1 4 2 5];
-dircolOptions.nPerInterval = [15 15 15 15 15];
+yDEPENDENCYstruct.dx = 1;%this state is the derivative of state x
+yDEPENDENCYstruct.y   = 0;%this state has no impact on the right hand side 
+
+
