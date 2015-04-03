@@ -82,6 +82,8 @@ sCOST = Struct2Vec(sCOSTstruct,actParamNames);
 %The yDependency helps speeding up  the computation of the Jacobian in the
 %optimization by telling the optimizer which derivatives depends on which
 %states
-yDEPENDENCYstruct.x = 0; %this state has no impact on the right hand side of the ODE->'0'
+yDEPENDENCYstruct.x   = 0; %this state has no impact on the right hand side of the ODE->'0'
 yDEPENDENCYstruct.dx = 1;%this state is the derivative of state x
+yDEPENDENCYstruct.y   = 
+
 
