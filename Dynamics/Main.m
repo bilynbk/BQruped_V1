@@ -15,9 +15,6 @@ clc
 [actStateVec, actStateNames, actStateIndices] = ActStateDefinition();
 [actParamVec, actParamNames, actParamIndices] = ActParamDefinition();
 
-
-
-
 %% 1) Find an optimal periodic solution for all parameters 
 %INITIAL VALUES:
 yINIT = contStateVec;
