@@ -178,7 +178,7 @@ function [yOUT, zOUT, tOUT, varargout] = HybridDynamics(yIN, zIN, p, varargin)
         end    
     end
     % Map states for return values
-    yOUT = yIN;
+    yOUT = yIN;+
     zOUT = zIN;
     tOUT = tIN;
     if nargout == 4
