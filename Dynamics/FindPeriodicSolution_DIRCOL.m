@@ -120,9 +120,12 @@
 %           - Excitation parameters 'sCYC', that result in an optimal
 %             periodic motion
 %           - The final value of the overall cost-function 'costValue'
+<<<<<<< HEAD
 %
 % Created by C. David Remy on 03/14/2011
 %
+=======
+>>>>>>> origin/master
 %   See also HYBRIDDYNAMICS, FLOQUETANALYSIS.
 %
 function [yCYC, zCYC, pCYC, varargout] = FindPeriodicSolution_DIRCOL(hybrDynHndl, yINIT,   zINIT,  pINIT, varargin)
